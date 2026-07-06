@@ -5,20 +5,35 @@ require "../config/db.php";
 $error_message = "";
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $username = $_POST['username'];
-    $password = $_POST['password'];
 
-    // Hardcode admin dipertahankan sesuai logika bawaan Anda
-    if ($username === "admin" && $password === "1234") {
-        $_SESSION['admin'] = true;
-        header("Location: dashboard.php");
-        exit;
-    } else {
-        $error_message = "Incorrect username or password.";
+    $username = trim($_POST['username'] ?? '');
+    $password = trim($_POST['password'] ?? '');
+
+    $sql = "SELECT * FROM admin WHERE username = ?";
+    $stmt = mysqli_prepare($conn, $sql);
+
+    mysqli_stmt_bind_param($stmt, "s", $username);
+    mysqli_stmt_execute($stmt);
+
+    $result = mysqli_stmt_get_result($stmt);
+
+    if ($admin = mysqli_fetch_assoc($result)) {
+
+        if ($password === $admin['password']) {
+
+            $_SESSION['admin'] = true;
+            $_SESSION['admin_id'] = $admin['id'];
+            $_SESSION['admin_name'] = $admin['nama'];
+            $_SESSION['admin_username'] = $admin['username'];
+
+            header("Location: dashboard.php");
+            exit;
+        }
     }
+
+    $error_message = "Incorrect username or password.";
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="id">
 <head>

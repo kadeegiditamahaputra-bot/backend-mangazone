@@ -20,8 +20,8 @@ if (!$manga_id) {
 // 1. AMBIL DATA MANGA LANGSUNG DARI DATABASE
 // =========================================================================
 
-// Ambil data detail manga berdasarkan malId
-$stmt_manga = mysqli_prepare($conn, "SELECT * FROM manga WHERE malId = ?");
+// Ambil data detail manga berdasarkan mal_id (Struktur database baru)
+$stmt_manga = mysqli_prepare($conn, "SELECT * FROM manga WHERE mal_id = ?");
 mysqli_stmt_bind_param($stmt_manga, "i", $manga_id);
 mysqli_stmt_execute($stmt_manga);
 $result_manga = mysqli_stmt_get_result($stmt_manga);
@@ -43,18 +43,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $title = trim($_POST['title']);
         $score = floatval($_POST['score']);
         $chapters = intval($_POST['chapters']);
-        $imageUrl = trim($_POST['imageUrl']);
+        $image_url = trim($_POST['image_url']); // Menyesuaikan snake_case
         $synopsis = trim($_POST['synopsis']);
 
         if (empty($title)) {
             $error_message = "Manga title cannot be empty.";
         } else {
             try {
+                // Query UPDATE disesuaikan menggunakan image_url dan mal_id
                 $stmt_update = mysqli_prepare(
                     $conn, 
-                    "UPDATE manga SET title = ?, score = ?, chapters = ?, imageUrl = ?, synopsis = ? WHERE malId = ?"
+                    "UPDATE manga SET title = ?, score = ?, chapters = ?, image_url = ?, synopsis = ? WHERE mal_id = ?"
                 );
-                mysqli_stmt_bind_param($stmt_update, "sdissi", $title, $score, $chapters, $imageUrl, $synopsis, $manga_id);
+                mysqli_stmt_bind_param($stmt_update, "sdissi", $title, $score, $chapters, $image_url, $synopsis, $manga_id);
                 
                 if (mysqli_stmt_execute($stmt_update)) {
                     $success_message = "Repository settings updated successfully.";
@@ -63,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $manga_data['title'] = $title;
                     $manga_data['score'] = $score;
                     $manga_data['chapters'] = $chapters;
-                    $manga_data['imageUrl'] = $imageUrl;
+                    $manga_data['image_url'] = $image_url;
                     $manga_data['synopsis'] = $synopsis;
                 } else {
                     $error_message = "Failed to update database: " . mysqli_error($conn);
@@ -319,8 +320,8 @@ body {
                             </div>
 
                             <div class="col-12 col-md-4">
-                                <label for="imageUrl" class="mz-label">Image Cover Target URL</label>
-                                <input type="url" name="imageUrl" id="imageUrl" class="form-control mz-input-text" value="<?= htmlspecialchars($manga_data['imageUrl'] ?? '') ?>">
+                                <label for="image_url" class="mz-label">Image Cover Target URL</label>
+                                <input type="url" name="image_url" id="image_url" class="form-control mz-input-text" value="<?= htmlspecialchars($manga_data['image_url'] ?? '') ?>">
                             </div>
 
                             <div class="col-12">

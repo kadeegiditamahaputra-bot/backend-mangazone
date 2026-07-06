@@ -19,18 +19,18 @@ if (isset($mangas['data'])) {
     $mangas = [];
 }
 
-// Urutkan berdasarkan malId DESCENDING (ID tertinggi paling atas)
+// Urutkan berdasarkan mal_id/malId DESCENDING (ID tertinggi paling atas)
 usort($mangas, function($a, $b) {
-    $idA = $a['malId'] ?? ($a['mal_id'] ?? 0);
-    $idB = $b['malId'] ?? ($b['mal_id'] ?? 0);
-    return $idB <=> $idA; // Diubah agar ID besar di atas
+    $idA = $a['mal_id'] ?? ($a['malId'] ?? 0);
+    $idB = $b['mal_id'] ?? ($b['malId'] ?? 0);
+    return $idB <=> $idA;
 });
 
 // PROSES INSERT DATA SELESAI SUBMIT FORM
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $malId = intval($_POST['malId']);
+    $mal_id = intval($_POST['malId']); // Menggunakan snake_case secara internal
     $title = trim($_POST['title']);
-    $imageUrl = trim($_POST['imageUrl']);
+    $image_url = trim($_POST['imageUrl']); // Menggunakan snake_case secara internal
     $score = floatval($_POST['score']);
     $chapters = intval($_POST['chapters']);
     $synopsis = trim($_POST['synopsis']);
@@ -45,24 +45,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($title == "") {
         $error_message = "Manga title cannot be empty.";
     } else {
-        // Cek duplikasi MAL ID di database
-        $cek = mysqli_query($conn, "SELECT malId FROM manga WHERE malId='$malId'");
+        // Cek duplikasi MAL ID di database menggunakan Prepared Statement agar aman
+        $stmt_cek = mysqli_prepare($conn, "SELECT mal_id FROM manga WHERE mal_id = ?");
+        mysqli_stmt_bind_param($stmt_cek, "i", $mal_id);
+        mysqli_stmt_execute($stmt_cek);
+        mysqli_stmt_store_result($stmt_cek);
+        $duplikat = mysqli_stmt_num_rows($stmt_cek);
+        mysqli_stmt_close($stmt_cek);
 
-        if (mysqli_num_rows($cek) > 0) {
+        if ($duplikat > 0) {
             $error_message = "MAL ID Reference already exists in repository registry.";
         } else {
-            // Prepared statement untuk keamanan database
+            // Prepared statement disesuaikan dengan skema database baru (mal_id, image_url)
             $stmt = mysqli_prepare(
                 $conn,
-                "INSERT INTO manga (malId, title, imageUrl, score, chapters, synopsis, genres) VALUES (?, ?, ?, ?, ?, ?, ?)"
+                "INSERT INTO manga (mal_id, title, image_url, score, chapters, synopsis, genres) VALUES (?, ?, ?, ?, ?, ?, ?)"
             );
 
             mysqli_stmt_bind_param(
                 $stmt,
                 "issdiss",
-                $malId,
+                $mal_id,
                 $title,
-                $imageUrl,
+                $image_url,
                 $score,
                 $chapters,
                 $synopsis,
@@ -78,10 +83,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (isset($mangas['data'])) { 
                     $mangas = $mangas['data']; 
                 }
-                // Urutkan kembali berdasarkan malId DESCENDING setelah refresh
+                // Urutkan kembali berdasarkan mal_id DESCENDING setelah refresh
                 usort($mangas, function($a, $b) {
-                    $idA = $a['malId'] ?? ($a['mal_id'] ?? 0);
-                    $idB = $b['malId'] ?? ($b['mal_id'] ?? 0);
+                    $idA = $a['mal_id'] ?? ($a['malId'] ?? 0);
+                    $idB = $b['mal_id'] ?? ($b['malId'] ?? 0);
                     return $idB <=> $idA;
                 });
             } else {
@@ -377,7 +382,8 @@ body {
                 <div class="mz-scroll-container" id="idListGroup">
                     <?php if(!empty($mangas)): ?>
                         <?php foreach($mangas as $m): 
-                            $mId = $m['malId'] ?? ($m['mal_id'] ?? 0);
+                            // Fallback handle jika API backend belum bermigrasi ke snake_case
+                            $mId = $m['mal_id'] ?? ($m['malId'] ?? 0);
                             $mTitle = $m['title'] ?? 'Untitled';
                         ?>
                             <div class="mz-list-item" data-search-text="<?= htmlspecialchars(strtolower($mId . ' ' . $mTitle)) ?>">

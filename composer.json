@@ -1,0 +1,13 @@
+{
+    "name": "ikadeegiditamp/mangazone-backend",
+    "description": "Backend API MangaZone",
+    "type": "project",
+    "authors": [
+        {
+            "name": "kadeegiditamahaputra-bot",
+            "email": "kadeegiditamahaputra@gmail.com"
+        }
+    ],
+    "minimum-stability": "stable",
+    "require": {}
+}

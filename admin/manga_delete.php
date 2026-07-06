@@ -10,11 +10,13 @@ require "../config/db.php";
 
 $id = intval($_GET['id']);
 
-$stmt = mysqli_prepare($conn, "DELETE FROM manga WHERE malId = ?");
+// Query DELETE disesuaikan menggunakan mal_id (Struktur database baru)
+$stmt = mysqli_prepare($conn, "DELETE FROM manga WHERE mal_id = ?");
 mysqli_stmt_bind_param($stmt, "i", $id);
 mysqli_stmt_execute($stmt);
+mysqli_stmt_close($stmt);
 
-// Bagian eksekusi database dan redirect di atas sengaja tetap berjalan normal.
+// Bagian eksekusi database di atas tetap berjalan normal.
 // Namun, agar desain di bawah sempat terlihat oleh mata user sebelum berpindah halaman,
 // kita gunakan script redirect setelah jeda animasi selesai (sekitar 1.2 detik).
 ?>

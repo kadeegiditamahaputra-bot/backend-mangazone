@@ -20,17 +20,15 @@ if (!empty($api_response)) {
     }
 }
 
-// Koleksi semua genre unik dari API
+// Koleksi semua genre unik dari API (Sekarang berupa array string murni)
 $genres = [];
 if (!empty($mangas)) {
     foreach ($mangas as $m) {
         if (isset($m['genres']) && is_array($m['genres'])) {
-            foreach ($m['genres'] as $g) {
-                if (isset($g['name'])) {
-                    $cleanGenre = strtolower(trim($g['name']));
-                    if (!empty($cleanGenre)) {
-                        $genres[$cleanGenre] = trim($g['name']);
-                    }
+            foreach ($m['genres'] as $g_name) {
+                $cleanGenre = strtolower(trim($g_name));
+                if (!empty($cleanGenre)) {
+                    $genres[$cleanGenre] = trim($g_name);
                 }
             }
         }
@@ -334,21 +332,22 @@ body {
     <?php if(!empty($mangas)): ?>
         <?php foreach ($mangas as $manga): ?>
           <?php
-            $image = $manga['imageUrl'] 
-                     ?? ($manga['images']['jpg']['image_url'] ?? 'https://via.placeholder.com/80x110?text=No+Cover');
+            // Membaca langsung property imageUrl ter-mapping dari API
+            $image = $manga['imageUrl'] ?? 'https://via.placeholder.com/80x110?text=No+Cover';
 
             $title = $manga['title'] ?? 'Untitled Manga';
             $chapters = $manga['chapters'] ?? 0;
             $score = $manga['score'] ?? '0.0';
-            $malId = $manga['malId'] ?? ($manga['mal_id'] ?? 0);
+            $malId = $manga['malId'] ?? 0;
             
             $mangaGenreList = [];
             $primaryGenre = 'adventure'; 
 
+            // Penyesuaian loop karena struktur baru berupa array string murni (["Action", "Comedy"])
             if (isset($manga['genres']) && is_array($manga['genres'])) {
-                foreach ($manga['genres'] as $g) { 
-                    if(isset($g['name'])) {
-                        $mangaGenreList[] = strtolower(trim($g['name']));
+                foreach ($manga['genres'] as $g_name) { 
+                    if(!empty($g_name)) {
+                        $mangaGenreList[] = strtolower(trim($g_name));
                     }
                 }
                 if(!empty($mangaGenreList)) {

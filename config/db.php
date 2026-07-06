@@ -3,7 +3,7 @@
 $host = "localhost";
 $user = "root";
 $pass = "300126";   // sesuaikan dengan password MySQL kamu
-$db   = "mangazone_db";
+$db   = "db_mangazone";
 
 $conn = mysqli_connect($host, $user, $pass, $db);
 

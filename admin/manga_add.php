@@ -23,76 +23,128 @@ if (isset($mangas['data'])) {
 usort($mangas, function($a, $b) {
     $idA = $a['mal_id'] ?? ($a['malId'] ?? 0);
     $idB = $b['mal_id'] ?? ($b['malId'] ?? 0);
-    return $idB <=> $idA;
+    $idB_num = intval($idB);
+    $idA_num = intval($idA);
+    return $idB_num <=> $idA_num;
 });
 
 // PROSES INSERT DATA SELESAI SUBMIT FORM
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $mal_id = intval($_POST['malId']); // Menggunakan snake_case secara internal
+    $mal_id = !empty($_POST['malId']) ? intval($_POST['malId']) : null; // Menyesuaikan jika di DB bisa NULL
     $title = trim($_POST['title']);
-    $image_url = trim($_POST['imageUrl']); // Menggunakan snake_case secara internal
+    $image_url = trim($_POST['imageUrl']); 
     $score = floatval($_POST['score']);
     $chapters = intval($_POST['chapters']);
     $synopsis = trim($_POST['synopsis']);
 
-    // Mengolah genre yang dipisahkan koma menjadi array JSON
-    $genres = [];
-    if (!empty($_POST['genres'])) {
-        $genres = array_map('trim', explode(',', $_POST['genres']));
-    }
-    $genresJson = json_encode($genres);
-
     if ($title == "") {
         $error_message = "Manga title cannot be empty.";
     } else {
-        // Cek duplikasi MAL ID di database menggunakan Prepared Statement agar aman
-        $stmt_cek = mysqli_prepare($conn, "SELECT mal_id FROM manga WHERE mal_id = ?");
-        mysqli_stmt_bind_param($stmt_cek, "i", $mal_id);
-        mysqli_stmt_execute($stmt_cek);
-        mysqli_stmt_store_result($stmt_cek);
-        $duplikat = mysqli_stmt_num_rows($stmt_cek);
-        mysqli_stmt_close($stmt_cek);
+        // Cek duplikasi MAL ID di database jika mal_id diinput (karena kolom berstatus UNIQUE)
+        $duplikat = 0;
+        if ($mal_id !== null) {
+            $stmt_cek = mysqli_prepare($conn, "SELECT mal_id FROM manga WHERE mal_id = ?");
+            mysqli_stmt_bind_param($stmt_cek, "i", $mal_id);
+            mysqli_stmt_execute($stmt_cek);
+            mysqli_stmt_store_result($stmt_cek);
+            $duplikat = mysqli_stmt_num_rows($stmt_cek);
+            mysqli_stmt_close($stmt_cek);
+        }
 
         if ($duplikat > 0) {
             $error_message = "MAL ID Reference already exists in repository registry.";
         } else {
-            // Prepared statement disesuaikan dengan skema database baru (mal_id, image_url)
-            $stmt = mysqli_prepare(
-                $conn,
-                "INSERT INTO manga (mal_id, title, image_url, score, chapters, synopsis, genres) VALUES (?, ?, ?, ?, ?, ?, ?)"
-            );
+            // Gunakan Database Transaction agar jika penulisan Genre gagal, data Manga ikut dibatalkan (konsisten)
+            mysqli_begin_transaction($conn);
 
-            mysqli_stmt_bind_param(
-                $stmt,
-                "issdiss",
-                $mal_id,
-                $title,
-                $image_url,
-                $score,
-                $chapters,
-                $synopsis,
-                $genresJson
-            );
+            try {
+                // Prepared statement disesuaikan dengan skema tabel manga kamu
+                $stmt = mysqli_prepare(
+                    $conn,
+                    "INSERT INTO manga (mal_id, title, image_url, score, chapters, synopsis, source) VALUES (?, ?, ?, ?, ?, ?, 'admin')"
+                );
 
-            if (mysqli_stmt_execute($stmt)) {
-                $success_message = "Repository '" . htmlspecialchars($title) . "' has been created successfully.";
+                mysqli_stmt_bind_param(
+                    $stmt,
+                    "issdis",
+                    $mal_id,
+                    $title,
+                    $image_url,
+                    $score,
+                    $chapters,
+                    $synopsis
+                );
 
-                // Refresh data sidebar index setelah data berhasil masuk database
-                $json = file_get_contents("http://localhost/mangazone-backend/api/manga.php");
-                $mangas = json_decode($json, true);
-                if (isset($mangas['data'])) { 
-                    $mangas = $mangas['data']; 
+                if (mysqli_stmt_execute($stmt)) {
+                    // Ambil ID AUTO_INCREMENT utama dari manga yang baru saja di-insert (untuk foreign key manga_genre.manga_id)
+                    $internal_manga_id = mysqli_insert_id($conn);
+                    mysqli_stmt_close($stmt);
+
+                    // Proses Input Genre secara Relasional ke tabel 'genre' dan 'manga_genre'
+                    if (!empty($_POST['genres'])) {
+                        $raw_genres = array_map('trim', explode(',', $_POST['genres']));
+                        
+                        // Menyeragamkan format teks genre (lowercase lalu jadikan Kapital di Awal Kata) 
+                        // Mencegah duplikasi "Action", "action", "ACTION" di database master
+                        $clean_genres = array_map('ucwords', array_map('strtolower', $raw_genres));
+                        
+                        // Buang item duplikat atau string kosong yang tidak sengaja terketik
+                        $genres = array_unique(array_filter($clean_genres));
+
+                        foreach ($genres as $genre_name) {
+                            if ($genre_name === '') continue;
+
+                            $genre_id = null;
+
+                            // 1. Cek apakah nama genre sudah terdaftar di tabel master 'genre'
+                            $stmt_genre_cek = mysqli_prepare($conn, "SELECT id FROM genre WHERE name = ?");
+                            mysqli_stmt_bind_param($stmt_genre_cek, "s", $genre_name);
+                            mysqli_stmt_execute($stmt_genre_cek);
+                            mysqli_stmt_bind_result($stmt_genre_cek, $genre_id);
+                            mysqli_stmt_fetch($stmt_genre_cek);
+                            mysqli_stmt_close($stmt_genre_cek);
+
+                            // 2. Jika genre belum terdaftar, lakukan insert ke tabel 'genre'
+                            if (!$genre_id) {
+                                $stmt_genre_ins = mysqli_prepare($conn, "INSERT INTO genre (name) VALUES (?)");
+                                mysqli_stmt_bind_param($stmt_genre_ins, "s", $genre_name);
+                                mysqli_stmt_execute($stmt_genre_ins);
+                                $genre_id = mysqli_insert_id($conn);
+                                mysqli_stmt_close($stmt_genre_ins);
+                            }
+
+                            // 3. Hubungkan relasi Many-to-Many di tabel penghubung 'manga_genre'
+                            // Menggunakan INSERT IGNORE untuk mengantisipasi error constraint tak terduga
+                            $stmt_pivot = mysqli_prepare($conn, "INSERT IGNORE INTO manga_genre (manga_id, genre_id) VALUES (?, ?)");
+                            mysqli_stmt_bind_param($stmt_pivot, "ii", $internal_manga_id, $genre_id);
+                            mysqli_stmt_execute($stmt_pivot);
+                            mysqli_stmt_close($stmt_pivot);
+                        }
+                    }
+
+                    // Jika seluruh rangkaian query aman, simpan data permanen ke MySQL
+                    mysqli_commit($conn);
+                    $success_message = "Repository '" . htmlspecialchars($title) . "' has been created successfully.";
+
+                    // Refresh data sidebar index setelah data berhasil masuk database
+                    $json = file_get_contents("http://localhost/mangazone-backend/api/manga.php");
+                    $mangas = json_decode($json, true);
+                    if (isset($mangas['data'])) { 
+                        $mangas = $mangas['data']; 
+                    }
+                    usort($mangas, function($a, $b) {
+                        $idA = $a['mal_id'] ?? ($a['malId'] ?? 0);
+                        $idB = $b['mal_id'] ?? ($b['malId'] ?? 0);
+                        return intval($idB) <=> intval($idA);
+                    });
+                } else {
+                    throw new Exception(mysqli_error($conn));
                 }
-                // Urutkan kembali berdasarkan mal_id DESCENDING setelah refresh
-                usort($mangas, function($a, $b) {
-                    $idA = $a['mal_id'] ?? ($a['malId'] ?? 0);
-                    $idB = $b['mal_id'] ?? ($b['malId'] ?? 0);
-                    return $idB <=> $idA;
-                });
-            } else {
-                $error_message = "Database runtime error: " . mysqli_error($conn);
+            } catch (Exception $e) {
+                // Gagalkan semua rangkaian jika ada satu bagian relasi yang error
+                mysqli_rollback($conn);
+                $error_message = "Database runtime error: " . $e->getMessage();
             }
-            mysqli_stmt_close($stmt);
         }
     }
 }
@@ -382,7 +434,6 @@ body {
                 <div class="mz-scroll-container" id="idListGroup">
                     <?php if(!empty($mangas)): ?>
                         <?php foreach($mangas as $m): 
-                            // Fallback handle jika API backend belum bermigrasi ke snake_case
                             $mId = $m['mal_id'] ?? ($m['malId'] ?? 0);
                             $mTitle = $m['title'] ?? 'Untitled';
                         ?>

@@ -17,7 +17,7 @@ if (!$manga_id) {
 }
 
 // =========================================================================
-// 1. AMBIL DATA MANGA LANGSUNG DARI DATABASE
+// 1. AMBIL DATA MANGA & GENRE LANGSUNG DARI DATABASE
 // =========================================================================
 
 // Ambil data detail manga berdasarkan mal_id (Struktur database baru)
@@ -34,8 +34,27 @@ if (!$manga_data) {
     exit;
 }
 
+// Dapatkan ID internal database utama untuk relasi tabel pivot manga_genre
+$internal_manga_id = $manga_data['id'];
+
+// Ambil daftar genre yang sudah terikat dengan manga ini untuk ditampilkan di form
+$current_genres = [];
+$query_genres = "SELECT g.name FROM genre g 
+                 JOIN manga_genre mg ON g.id = mg.genre_id 
+                 WHERE mg.manga_id = ?";
+$stmt_curr_g = mysqli_prepare($conn, $query_genres);
+mysqli_stmt_bind_param($stmt_curr_g, "i", $internal_manga_id);
+mysqli_stmt_execute($stmt_curr_g);
+$res_curr_g = mysqli_stmt_get_result($stmt_curr_g);
+while ($row_g = mysqli_fetch_assoc($res_curr_g)) {
+    $current_genres[] = $row_g['name'];
+}
+mysqli_stmt_close($stmt_curr_g);
+$genres_string = implode(', ', $current_genres);
+
+
 // =========================================================================
-// 2. LOGIKA PROSES POST ACTION (UPDATE METADATA UTAMA MANGA)
+// 2. LOGIKA PROSES POST ACTION (UPDATE METADATA & GENRE)
 // =========================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
@@ -43,34 +62,84 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $title = trim($_POST['title']);
         $score = floatval($_POST['score']);
         $chapters = intval($_POST['chapters']);
-        $image_url = trim($_POST['image_url']); // Menyesuaikan snake_case
+        $image_url = trim($_POST['image_url']); 
         $synopsis = trim($_POST['synopsis']);
 
         if (empty($title)) {
             $error_message = "Manga title cannot be empty.";
         } else {
             try {
-                // Query UPDATE disesuaikan menggunakan image_url dan mal_id
+                // Dimulai dengan database transaction agar proses update metadata dan relasi genre aman & tersinkronisasi
+                mysqli_begin_transaction($conn);
+
+                // Query UPDATE utama menggunakan mal_id
                 $stmt_update = mysqli_prepare(
                     $conn, 
                     "UPDATE manga SET title = ?, score = ?, chapters = ?, image_url = ?, synopsis = ? WHERE mal_id = ?"
                 );
                 mysqli_stmt_bind_param($stmt_update, "sdissi", $title, $score, $chapters, $image_url, $synopsis, $manga_id);
-                
-                if (mysqli_stmt_execute($stmt_update)) {
-                    $success_message = "Repository settings updated successfully.";
-                    
-                    // Refresh data display lokal supaya input langsung terupdate di layar
-                    $manga_data['title'] = $title;
-                    $manga_data['score'] = $score;
-                    $manga_data['chapters'] = $chapters;
-                    $manga_data['image_url'] = $image_url;
-                    $manga_data['synopsis'] = $synopsis;
-                } else {
-                    $error_message = "Failed to update database: " . mysqli_error($conn);
-                }
+                mysqli_stmt_execute($stmt_update);
                 mysqli_stmt_close($stmt_update);
+
+                // PROSES SINKRONISASI GENRE (MANY-TO-MANY)
+                // Hapus semua relasi genre lama milik manga ini terlebih dahulu
+                $stmt_del_rel = mysqli_prepare($conn, "DELETE FROM manga_genre WHERE manga_id = ?");
+                mysqli_stmt_bind_param($stmt_del_rel, "i", $internal_manga_id);
+                mysqli_stmt_execute($stmt_del_rel);
+                mysqli_stmt_close($stmt_del_rel);
+
+                // Daftarkan ulang genre baru yang diinputkan oleh user
+                if (!empty($_POST['genres'])) {
+                    $raw_genres = array_map('trim', explode(',', $_POST['genres']));
+                    $clean_genres = array_map('ucwords', array_map('strtolower', $raw_genres));
+                    $genres = array_unique(array_filter($clean_genres));
+
+                    foreach ($genres as $genre_name) {
+                        if ($genre_name === '') continue;
+
+                        $genre_id = null;
+
+                        // Cek apakah genre sudah ada di tabel master master 'genre'
+                        $stmt_genre_cek = mysqli_prepare($conn, "SELECT id FROM genre WHERE name = ?");
+                        mysqli_stmt_bind_param($stmt_genre_cek, "s", $genre_name);
+                        mysqli_stmt_execute($stmt_genre_cek);
+                        mysqli_stmt_bind_result($stmt_genre_cek, $genre_id);
+                        mysqli_stmt_fetch($stmt_genre_cek);
+                        mysqli_stmt_close($stmt_genre_cek);
+
+                        // Jika belum ada, buat baru
+                        if (!$genre_id) {
+                            $stmt_genre_ins = mysqli_prepare($conn, "INSERT INTO genre (name) VALUES (?)");
+                            mysqli_stmt_bind_param($stmt_genre_ins, "s", $genre_name);
+                            mysqli_stmt_execute($stmt_genre_ins);
+                            $genre_id = mysqli_insert_id($conn);
+                            mysqli_stmt_close($stmt_genre_ins);
+                        }
+
+                        // Buat ikatan relasi baru di tabel pivot manga_genre
+                        $stmt_pivot = mysqli_prepare($conn, "INSERT IGNORE INTO manga_genre (manga_id, genre_id) VALUES (?, ?)");
+                        mysqli_stmt_bind_param($stmt_pivot, "ii", $internal_manga_id, $genre_id);
+                        mysqli_stmt_execute($stmt_pivot);
+                        mysqli_stmt_close($stmt_pivot);
+                    }
+                }
+
+                // Jika semua query berhasil tanpa gangguan, simpan perubahan permanen
+                mysqli_commit($conn);
+
+                $success_message = "Repository settings and genres updated successfully.";
+                
+                // Refresh data display lokal supaya input langsung terupdate di layar
+                $manga_data['title'] = $title;
+                $manga_data['score'] = $score;
+                $manga_data['chapters'] = $chapters;
+                $manga_data['image_url'] = $image_url;
+                $manga_data['synopsis'] = $synopsis;
+                $genres_string = isset($_POST['genres']) ? htmlspecialchars(trim($_POST['genres'])) : '';
+
             } catch (Exception $e) {
+                // Batalkan seluruh perubahan database jika di tengah jalan ada query yang error
+                mysqli_rollback($conn);
                 $error_message = "Failed to update metadata: " . $e->getMessage();
             }
         }
@@ -192,7 +261,8 @@ body {
 .mz-label-desc { 
     font-size: 12px; 
     color: #a3a3a3; 
-    margin-top: 4px; 
+    margin-top: -2px;
+    margin-bottom: 8px;
 }
 .mz-input-text {
     background-color: #ffffff;
@@ -231,6 +301,22 @@ body {
     background-color: #404040; 
     border-color: #404040;
     transform: translateY(-1px);
+}
+.btn-mz-cancel {
+    background-color: #ffffff;
+    border: 1px solid #e5e5e5;
+    color: #404040 !important;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 8px 18px;
+    border-radius: 8px;
+    text-decoration: none;
+    transition: all 0.2s ease;
+}
+.btn-mz-cancel:hover {
+    background-color: #f5f5f5;
+    border-color: #d4d4d4;
+    color: #171717 !important;
 }
 
 /* NOTIFICATION BANNER */
@@ -328,9 +414,17 @@ body {
                                 <label for="synopsis" class="mz-label">Synopsis Description</label>
                                 <textarea name="synopsis" id="synopsis" class="form-control mz-input-text mz-textarea-md" placeholder="Describe the overview breakdown here..."><?= htmlspecialchars($manga_data['synopsis'] ?? '') ?></textarea>
                             </div>
+
+                            <!-- INPUT BARU UNTUK EDIT GENRE -->
+                            <div class="col-12">
+                                <label for="genres" class="mz-label">Genres</label>
+                                <div class="mz-label-desc">Pisahkan dengan tanda koma (e.g., Action, Adventure, Fantasy).</div>
+                                <input type="text" name="genres" id="genres" class="form-control mz-input-text" placeholder="Action, Adventure, Comedy" value="<?= htmlspecialchars($genres_string) ?>">
+                            </div>
                         </div>
 
                         <div class="mt-4 pt-3 d-flex gap-2 justify-content-end border-top" style="border-color: #e5e5e5 !important;">
+                            <a href="dashboard.php" class="btn mz-btn-cancel">Cancel</a>
                             <button type="submit" class="btn btn-mz-primary">Save core configuration</button>
                         </div>
                     </form>
